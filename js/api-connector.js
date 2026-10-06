@@ -10,7 +10,7 @@
         mode: 'gemini', // 'mock' | 'gemini' | 'openai' | 'custom'
         endpointUrl: '/api/chat', // Uses backend proxy by default
         apiKey: '', // Empty by default; populated via env variable in backend or UI modal
-        modelName: 'gemini-2.0-flash',
+        modelName: 'gemini-3.8-flash',
         temperature: 0.7,
         customHeaders: '{\n  "Content-Type": "application/json"\n}'
     };
