@@ -8,7 +8,7 @@
 
     const defaultConfig = {
         mode: 'gemini', // 'mock' | 'gemini' | 'openai' | 'custom'
-        endpointUrl: '/api/chat', // Uses backend proxy by default
+        endpointUrl: 'http://localhost:3000/api/chat', // Backend proxy URL
         apiKey: '', // Empty by default; populated via env variable in backend or UI modal
         modelName: 'gemini-3.8-flash',
         temperature: 0.7,
@@ -64,18 +64,15 @@
         async streamMockResponse(history, { onThinking, onChunk, onComplete, abortSignal }) {
             const lastUserMsg = history[history.length - 1]?.content?.toLowerCase() || '';
 
-            // Match keyword in mock dataset
             const match = window.AetherPrompts.mockResponses.find(item =>
                 item.keywords.some(kw => lastUserMsg.includes(kw))
             ) || window.AetherPrompts.defaultMockFallback;
 
-            // 1. Simulate Reasoning / Thinking phase (if requested or available)
             if (match.thinking && onThinking) {
                 onThinking(match.thinking);
                 await this.delay(600);
             }
 
-            // 2. Stream tokens in small chunks
             const textToStream = match.text;
             let currentText = '';
             const chunkSize = 4;
@@ -90,8 +87,6 @@
                 currentText += chunk;
 
                 if (onChunk) onChunk(chunk, currentText);
-
-                // Variable typing speed
                 await this.delay(Math.floor(Math.random() * 25) + 10);
             }
 
@@ -116,26 +111,42 @@
                     ...parsedHeaders
                 };
 
-                let targetUrl = this.config.endpointUrl || '/api/chat';
+                let targetUrl = 'http://localhost:3000/api/chat';
+                let payload = {};
+                const modelName = 'gemini-3.8-flash';
 
-                // If user provided a client API Key in the UI modal, pass Authorization header
-                if (this.config.apiKey) {
-                    headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+                // Scenario A: Client provided API Key directly in UI modal -> Call Google Gemini REST API directly
+                if (this.config.apiKey && this.config.apiKey.length > 5) {
+                    targetUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${this.config.apiKey}`;
+                    
+                    const formattedContents = history
+                        .filter(m => m.role !== 'system')
+                        .map(m => ({
+                            role: m.role === 'assistant' ? 'model' : 'user',
+                            parts: [{ text: m.content || '' }]
+                        }));
+
+                    const systemMsg = history.find(m => m.role === 'system');
+                    payload = {
+                        contents: formattedContents,
+                        generationConfig: { temperature: parseFloat(this.config.temperature) || 0.7 }
+                    };
+
+                    if (systemMsg) {
+                        payload.systemInstruction = { parts: [{ text: systemMsg.content }] };
+                    }
+                } else {
+                    // Scenario B: Route to local backend proxy server at http://localhost:3000/api/chat
+                    if (this.config.apiKey) {
+                        headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+                    }
+                    payload = {
+                        model: modelName,
+                        messages: history,
+                        temperature: parseFloat(this.config.temperature) || 0.7,
+                        stream: true
+                    };
                 }
-
-                if (this.config.mode === 'gemini' && (!this.config.endpointUrl || this.config.endpointUrl.includes('api.openai.com'))) {
-                    // Route to backend proxy or Google Gemini OpenAI-compatible endpoint
-                    targetUrl = this.config.apiKey 
-                        ? 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
-                        : '/api/chat';
-                }
-
-                const payload = {
-                    model: this.config.modelName || (this.config.mode === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o'),
-                    messages: history,
-                    temperature: parseFloat(this.config.temperature) || 0.7,
-                    stream: true
-                };
 
                 const response = await fetch(targetUrl, {
                     method: 'POST',
@@ -163,7 +174,7 @@
 
                         buffer += decoder.decode(value, { stream: true });
                         const lines = buffer.split('\n');
-                        buffer = lines.pop(); // Keep incomplete line in buffer
+                        buffer = lines.pop();
 
                         for (const line of lines) {
                             const trimmed = line.trim();
@@ -178,7 +189,12 @@
                                     const jsonStr = trimmed.replace(/^data:\s*/, '');
                                     const data = JSON.parse(jsonStr);
                                     
-                                    const contentChunk = data.choices?.[0]?.delta?.content || data.choices?.[0]?.text || '';
+                                    // Parse OpenAI delta OR native Gemini candidates[0].content.parts[0].text
+                                    const contentChunk = data.choices?.[0]?.delta?.content 
+                                        || data.candidates?.[0]?.content?.parts?.[0]?.text 
+                                        || data.choices?.[0]?.text 
+                                        || '';
+
                                     if (contentChunk) {
                                         fullText += contentChunk;
                                         if (onChunk) onChunk(contentChunk, fullText);
@@ -200,7 +216,9 @@
                     return fullText;
                 } else {
                     const data = await response.json();
-                    const content = data.choices?.[0]?.message?.content || JSON.stringify(data, null, 2);
+                    const content = data.choices?.[0]?.message?.content 
+                        || data.candidates?.[0]?.content?.parts?.[0]?.text 
+                        || JSON.stringify(data, null, 2);
                     if (onChunk) onChunk(content, content);
                     if (onComplete) onComplete(content);
                     return content;
