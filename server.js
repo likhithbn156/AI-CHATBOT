@@ -1,6 +1,6 @@
 /**
  * AetherAI — Zero-Dependency Native Node.js Backend Server
- * Serves static web app & proxies chat requests to Google Gemini 3.8 Flash API cleanly.
+ * Serves static web app & proxies chat requests to Groq API (OpenAI-compatible).
  */
 
 const http = require('http');
@@ -64,50 +64,39 @@ const server = http.createServer((req, res) => {
                 const messages = parsed.messages || [];
                 const temperature = parsed.temperature || 0.7;
 
-                const authHeader = req.headers['authorization'];
-                const clientKey = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
-                const apiKey = clientKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+                const apiKey = process.env.GROQ_API_KEY;
 
                 if (!apiKey) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'No API Key configured. Please add GEMINI_API_KEY in your local .env file.' }));
+                    res.end(JSON.stringify({ error: 'No API Key configured. Please add GROQ_API_KEY in your local .env file.' }));
                     return;
                 }
 
-                // Format OpenAI messages to Gemini format
-                const formattedContents = messages
-                    .filter(m => m.role !== 'system')
-                    .map(m => ({
-                        role: m.role === 'assistant' ? 'model' : 'user',
-                        parts: [{ text: m.content || '' }]
-                    }));
-
-                const systemMsg = messages.find(m => m.role === 'system');
-                const geminiPayload = {
-                    contents: formattedContents,
-                    generationConfig: { temperature: parseFloat(temperature) }
-                };
-
-                if (systemMsg) {
-                    geminiPayload.systemInstruction = { parts: [{ text: systemMsg.content }] };
-                }
-
-                const postData = JSON.stringify(geminiPayload);
-                const modelName = 'gemini-3.8-flash';
-                const geminiPath = `/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
+                // Groq API is OpenAI-compatible
+                const groqPayload = JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: messages,
+                    temperature: parseFloat(temperature),
+                    stream: true
+                });
 
                 const apiReq = https.request({
-                    hostname: 'generativelanguage.googleapis.com',
-                    path: geminiPath,
+                    hostname: 'api.groq.com',
+                    path: '/openai/v1/chat/completions',
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Content-Length': Buffer.byteLength(postData)
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Length': Buffer.byteLength(groqPayload)
                     }
                 }, (apiRes) => {
                     if (apiRes.statusCode !== 200) {
-                        res.writeHead(apiRes.statusCode, { 'Content-Type': 'text/plain' });
-                        apiRes.pipe(res);
+                        let errBody = '';
+                        apiRes.on('data', c => { errBody += c; });
+                        apiRes.on('end', () => {
+                            res.writeHead(apiRes.statusCode, { 'Content-Type': 'application/json' });
+                            res.end(errBody);
+                        });
                         return;
                     }
 
@@ -117,29 +106,12 @@ const server = http.createServer((req, res) => {
                         'Connection': 'keep-alive'
                     });
 
-                    let buffer = '';
+                    // Groq streams in OpenAI SSE format — pass through directly
                     apiRes.on('data', chunk => {
-                        buffer += chunk.toString();
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop();
-
-                        for (const line of lines) {
-                            const trimmed = line.trim();
-                            if (!trimmed.startsWith('data: ')) continue;
-                            try {
-                                const jsonStr = trimmed.replace(/^data:\s*/, '');
-                                const data = JSON.parse(jsonStr);
-                                const textChunk = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                                if (textChunk) {
-                                    const openAiDelta = { choices: [{ delta: { content: textChunk } }] };
-                                    res.write(`data: ${JSON.stringify(openAiDelta)}\n\n`);
-                                }
-                            } catch (e) {}
-                        }
+                        res.write(chunk);
                     });
 
                     apiRes.on('end', () => {
-                        res.write('data: [DONE]\n\n');
                         res.end();
                     });
                 });
@@ -149,7 +121,7 @@ const server = http.createServer((req, res) => {
                     res.end(JSON.stringify({ error: err.message }));
                 });
 
-                apiReq.write(postData);
+                apiReq.write(groqPayload);
                 apiReq.end();
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -178,4 +150,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`🚀 AetherAI Chatbot Server running on http://localhost:${PORT}`);
+    console.log(`⚡ Powered by Groq — llama-3.3-70b-versatile`);
 });
