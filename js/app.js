@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         pinnedChatsList: document.getElementById('pinned-chats-list'),
         recentChatsList: document.getElementById('recent-chats-list'),
         themeToggleBtn: document.getElementById('theme-toggle-btn'),
+        headerThemeToggleBtn: document.getElementById('header-theme-toggle-btn'),
 
         // API Status Card & Modal
         btnOpenApiModal: document.getElementById('btn-open-api-modal'),
@@ -579,7 +580,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Theme Toggle
-        el.themeToggleBtn.addEventListener('click', toggleTheme);
+        [el.themeToggleBtn, el.headerThemeToggleBtn].forEach(button => {
+            button.addEventListener('click', toggleTheme);
+        });
 
         // Textarea Auto-Resize & Submit Handlers
         el.chatTextarea.addEventListener('input', () => {
@@ -824,8 +827,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function initTheme() {
-        const savedTheme = localStorage.getItem(STORAGE_THEME_KEY) || 'dark';
+        const storedTheme = localStorage.getItem(STORAGE_THEME_KEY);
+        const savedTheme = storedTheme === 'light' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', savedTheme);
+        updateThemeControls(savedTheme);
     }
 
     function toggleTheme() {
@@ -833,7 +838,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const next = current === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', next);
         localStorage.setItem(STORAGE_THEME_KEY, next);
+        updateThemeControls(next);
         showToast(`Theme switched to ${next} mode`);
+    }
+
+    function updateThemeControls(theme) {
+        const nextTheme = theme === 'dark' ? 'light' : 'dark';
+        const label = `Switch to ${nextTheme} mode`;
+
+        [el.themeToggleBtn, el.headerThemeToggleBtn].forEach(button => {
+            button.setAttribute('aria-label', label);
+            button.title = label;
+        });
+        el.headerThemeToggleBtn.querySelector('.theme-toggle-label').textContent = `${nextTheme} mode`;
     }
 
     function openModal(modalEl) {
